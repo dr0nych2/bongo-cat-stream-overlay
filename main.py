@@ -48,10 +48,15 @@ class BongoCat:
         self.background_pos = (0, 0)
 
         # Фиксированная позиция левой лапки (для клавиатуры)
-        self.left_arm_pos = (20, 5)  # Подбери правильные координаты
+        self.left_arm_pos = (20, 5)
 
-        # Фиксированная позиция точки привязки правой лапки
-        self.right_arm_anchor = (350, 250)  # Подбери правильные координаты
+        # Две точки привязки правой лапки к телу кота (плечо и подмышка)
+        self.arm_anchor_top = (170, 115)  # Верхняя точка привязки (плечо)
+        self.arm_anchor_bottom = (170, 180)  # Нижняя точка привязки (подмышка)
+
+        # Начальные точки лапки (без растяжения)
+        self.arm_start_top = (170, 115)  # Начало лапки (верх)
+        self.arm_start_bottom = (170, 180)  # Начало лапки (низ)
 
         # Запуск отслеживания ввода
         self.start_input_listeners()
@@ -170,19 +175,85 @@ class BongoCat:
         threading.Thread(target=mouse_listener, daemon=True).start()
         threading.Thread(target=keyboard_listener, daemon=True).start()
 
-    def calculate_arm_position(self, base_x: int, base_y: int, target_x: int, target_y: int,
-                               max_length: int = 150) -> Tuple[int, int]:
-        """Рассчитывает позицию правой лапки для следования за мышью"""
-        dx = target_x - base_x
-        dy = target_y - base_y
-        distance = math.sqrt(dx ** 2 + dy ** 2)
+    def draw_stretched_arm(self):
+        """Отрисовывает правую лапку, растянутую между телом и мышкой"""
+        if self.right_arm is None:
+            return
 
-        if distance > max_length:
-            scale = max_length / distance
-            dx *= scale
-            dy *= scale
+        # Вычисляем вектор от начальной точки до мышки
+        dx_top = self.mouse_position[0] - self.arm_start_top[0]
+        dy_top = self.mouse_position[1] - self.arm_start_top[1]
 
-        return int(base_x + dx), int(base_y + dy)
+        dx_bottom = self.mouse_position[0] - self.arm_start_bottom[0]
+        dy_bottom = self.mouse_position[1] - self.arm_start_bottom[1]
+
+        # Ограничиваем максимальное растяжение
+        max_stretch = 150
+        distance_top = math.sqrt(dx_top ** 2 + dy_top ** 2)
+        distance_bottom = math.sqrt(dx_bottom ** 2 + dy_bottom ** 2)
+
+        if distance_top > max_stretch:
+            scale = max_stretch / distance_top
+            dx_top *= scale
+            dy_top *= scale
+
+        if distance_bottom > max_stretch:
+            scale = max_stretch / distance_bottom
+            dx_bottom *= scale
+            dy_bottom *= scale
+
+        # Вычисляем конечные точки лапки
+        arm_end_top = (self.arm_start_top[0] + dx_top, self.arm_start_top[1] + dy_top)
+        arm_end_bottom = (self.arm_start_bottom[0] + dx_bottom, self.arm_start_bottom[1] + dy_bottom)
+
+        # Создаем полигон для лапки (трапеция)
+        arm_polygon = [
+            self.arm_anchor_top,  # Верхняя точка привязки к телу
+            self.arm_anchor_bottom,  # Нижняя точка привязки к телу
+            arm_end_bottom,  # Нижняя точка лапки (у мышки)
+            arm_end_top  # Верхняя точка лапки (у мышки)
+        ]
+
+        # Создаем маску для лапки
+        arm_surface = pygame.Surface((self.window_width, self.window_height), pygame.SRCALPHA)
+        pygame.draw.polygon(arm_surface, (255, 255, 255, 128), arm_polygon)
+
+        # Накладываем текстуру лапки (упрощенный вариант)
+        # В реальности нужно было бы деформировать текстуру под полигон
+        arm_texture = self.right_arm.copy()
+
+        # Масштабируем текстуру под размеры лапки
+        poly_width = max(abs(arm_end_top[0] - self.arm_anchor_top[0]), 10)
+        poly_height = max(abs(arm_end_bottom[1] - self.arm_anchor_top[1]), 10)
+
+        # Вычисляем угол поворота текстуры
+        angle = math.degrees(math.atan2(dy_top, dx_top))
+        rotated_texture = pygame.transform.rotate(arm_texture, -angle)
+
+        # Масштабируем текстуру
+        scaled_texture = pygame.transform.scale(rotated_texture, (int(poly_width), int(poly_height)))
+
+        # Позиционируем текстуру
+        texture_pos = (
+            (self.arm_anchor_top[0] + arm_end_top[0]) // 2 - poly_width // 2,
+            (self.arm_anchor_top[1] + arm_end_top[1]) // 2 - poly_height // 2
+        )
+
+        # Накладываем текстуру на маску
+        arm_surface.blit(scaled_texture, texture_pos, special_flags=pygame.BLEND_RGBA_MULT)
+
+        # Отрисовываем лапку
+        self.screen.blit(arm_surface, (0, 0))
+
+        # ОТЛАДКА: рисуем контур лапки
+        debug_color = (0, 255, 0)  # Зеленый
+        pygame.draw.polygon(self.screen, debug_color, arm_polygon, 2)
+
+        # ОТЛАДКА: рисуем точки привязки
+        pygame.draw.circle(self.screen, (255, 0, 0), self.arm_anchor_top, 5)  # Красная - верхняя привязка
+        pygame.draw.circle(self.screen, (255, 0, 0), self.arm_anchor_bottom, 5)  # Красная - нижняя привязка
+        pygame.draw.circle(self.screen, (0, 0, 255), arm_end_top, 5)  # Синяя - верх лапки
+        pygame.draw.circle(self.screen, (0, 0, 255), arm_end_bottom, 5)  # Синяя - низ лапки
 
     def draw(self):
         """Отрисовывает все элементы кота"""
@@ -213,28 +284,8 @@ class BongoCat:
             debug_color = (255, 255, 0)  # Желтый
             pygame.draw.rect(self.screen, debug_color, (self.left_arm_pos[0], self.left_arm_pos[1], 50, 50), 2)
 
-        # 3. Правая лапка (следует за мышью) - прикреплена к телу
-        if self.right_arm is not None:
-            target_x, target_y = self.calculate_arm_position(
-                self.right_arm_anchor[0], self.right_arm_anchor[1],
-                self.mouse_position[0], self.mouse_position[1]
-            )
-
-            # Отрисовываем правую лапку с привязкой к точке анкера
-            right_arm_rect = self.right_arm.get_rect(center=(target_x, target_y))
-            self.screen.blit(self.right_arm, right_arm_rect)
-
-            # ОТЛАДКА: рисуем рамку вокруг правой лапки
-            debug_color = (0, 0, 255)  # Синий
-            pygame.draw.rect(self.screen, debug_color, right_arm_rect, 2)
-        else:
-            # Если изображение не загружено, рисуем круг вместо лапки
-            debug_color = (255, 0, 0)  # Красный
-            target_x, target_y = self.calculate_arm_position(
-                self.right_arm_anchor[0], self.right_arm_anchor[1],
-                self.mouse_position[0], self.mouse_position[1]
-            )
-            pygame.draw.circle(self.screen, debug_color, (target_x, target_y), 25, 2)
+        # 3. Правая лапка (растягивается между телом и мышкой)
+        self.draw_stretched_arm()
 
         # 4. Мышь (отображаем в преобразованных координатах коврика)
         if self.mouse_img is not None:
@@ -257,9 +308,6 @@ class BongoCat:
             text = font.render(str(i + 1), True, debug_color)
             self.screen.blit(text, (corner[0] + 10, corner[1] - 10))
 
-        # ОТЛАДКА: рисуем точку привязки правой лапки
-        pygame.draw.circle(self.screen, (0, 255, 0), self.right_arm_anchor, 5)
-
         # ОТЛАДКА: отображаем информацию о состоянии
         font = pygame.font.Font(None, 36)
         keys_text = font.render(f"Нажатые клавиши: {len(self.keys_pressed)}", True, (255, 255, 255))
@@ -277,7 +325,6 @@ class BongoCat:
                     self.running = False
 
     def run(self):
-        """Главный цикл"""
         clock = pygame.time.Clock()
 
         while self.running:
